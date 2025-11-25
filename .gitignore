@@ -1,5 +1,5 @@
-/dataset
-/training_checkpoints
+dataset/
+training_checkpoints/
 __pycache__/
 *.pyc
 *.pyo
