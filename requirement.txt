@@ -1,0 +1,5 @@
+pandas
+torchvision
+torch
+scikit-image
+
