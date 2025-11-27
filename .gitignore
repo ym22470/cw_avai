@@ -3,5 +3,5 @@ training_checkpoints/
 __pycache__/
 *.pyc
 *.pyo
-
+runs/
 
