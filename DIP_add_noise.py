@@ -17,6 +17,9 @@ torch.backends.cudnn.benchmark =True
 
 use_gpu = True
 
+noise_level = 0.02
+MAX_Images = 10
+
 if use_gpu:
     dtype = torch.cuda.FloatTensor
 else:
@@ -225,7 +228,7 @@ def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = 'runs'
-    run_dir = f'{log_dir}/dip_sr_dataset_{timestamp}'
+    run_dir = f'{log_dir}/dip_sigma_{noise_level}_{timestamp}'
     writer = SummaryWriter(run_dir)
     
     # Create text log file
@@ -247,8 +250,10 @@ def main():
     loss_fn = lpips.LPIPS(net='alex').to(device)
     
     for i, (lr_image, hr_image) in enumerate(valid_loader):
+        if i >= MAX_Images:
+            break
         print(f"\n{'='*60}")
-        print(f"Processing image {i+1}/{len(valid_loader)}")
+        print(f"Processing image {i+1}/{len(valid_loader)}  (sigma={noise_level})")
         print(f"{'='*60}")
         
         # Reinitialize network weights for each image
@@ -262,9 +267,11 @@ def main():
         skip_n11=4,
         num_scales=5
         ).type(dtype)
+
+        lr_noisy = add_awgn(lr_image.squeeze(0), noise_level)
         
         psnr, ssim_val, lpips_val = train_DIP_for_one_image(
-            net, loss_fn, lr_image.squeeze(0), hr_image.squeeze(0), writer, i, num_iter=num_iter
+            net, loss_fn, lr_noisy, hr_image.squeeze(0), writer, i, num_iter=num_iter
         )
         psnr_values.append(psnr)
         ssim_values.append(ssim_val)
