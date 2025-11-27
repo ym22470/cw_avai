@@ -1,49 +1,27 @@
 # some imports
 import numpy as np
 import torch
+import os
+import sys
 import torch.nn as nn
-import random
+import lpips 
 from scipy.ndimage import laplace, sobel
 from torch.utils.data import DataLoader, Dataset
-from PIL import Image, ImageFilter
 from dataloader import DIV2KDataset
 from torchvision import transforms
-from torchvision.transforms import Resize, Compose, ToTensor, Normalize
+from torchvision.transforms import Compose, ToTensor, Normalize
 from utils.utils_DIP.denoising_utils import *
-from models import downsampler
-import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
-import os
 from datetime import datetime
+from skimage.metrics import structural_similarity as ssim
 
 
-PLOT = True
-figsize = 8
-
-def get_mgrid(sidelen1,sidelen2, dim=2):
-    '''Generates a flattened grid of (x,y,...) coordinates in a range of -1 to 1.
-    sidelen: int
-    dim: int'''
-
-    if sidelen1 >= sidelen2:
-      # use sidelen1 steps to generate the grid
-      tensors = tuple(dim * [torch.linspace(-1, 1, steps = sidelen1)])
-      mgrid = torch.stack(torch.meshgrid(*tensors, indexing='ij'), dim = -1)
-      # crop it along one axis to fit sidelen2
-      minor = int((sidelen1 - sidelen2)/2)
-      mgrid = mgrid[:,minor:sidelen2 + minor]
-
-    if sidelen1 < sidelen2:
-      tensors = tuple(dim * [torch.linspace(-1, 1, steps = sidelen2)])
-      mgrid = torch.stack(torch.meshgrid(*tensors, indexing='ij'), dim = -1)
-
-      minor = int((sidelen2 - sidelen1)/2)
-      mgrid = mgrid[minor:sidelen1 + minor,:]
-
-    # flatten the gird
-    mgrid = mgrid.reshape(-1, dim)
-
-    return mgrid
+def get_mgrid(H, W, dim=2):
+    ys = torch.linspace(-1, 1, steps=H)
+    xs = torch.linspace(-1, 1, steps=W)
+    yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+    grid = torch.stack([xx, yy], dim=-1)  # [H, W, 2]
+    return grid.reshape(-1, dim)
 
 
 def image_to_tensor(img):
@@ -72,8 +50,6 @@ class SineLayer(nn.Module):
         self.is_first = is_first
 
         self.in_features = in_features
-        # Initialize a linear layer with specified input and output features
-        # 'bias' indicates whether to include a bias term
         self.linear = nn.Linear(in_features, out_features, bias=bias)
         self.init_weights()
 
@@ -89,7 +65,6 @@ class SineLayer(nn.Module):
                                              np.sqrt(6 / self.in_features) / self.omega_0)
 
     def forward(self, input):
-        # Task 1 TODO
         # 1. pass input through linear layer (self.linear layer performs the linear transformation on the input)
         x = self.linear(input)
 
@@ -177,29 +152,14 @@ valid_dataset = DIV2KDataset(
 
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
-def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=5000, batch_size=1, lr=1e-4
-                              ):
+def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=5000, print_every=500):
     lr_image_VR = lr_image
 
-    # Upsample LR image to match HR size
-    import torch.nn.functional as F
-    lr_image = F.interpolate(lr_image.unsqueeze(0), size=hr_image.shape[1:], mode='bicubic', align_corners=False).squeeze(0)
 
-    # Convert tensors to numpy arrays
-    lr_image_np = np.clip(torch_to_np(lr_image.unsqueeze(0)), 0, 1)
-
-
-    # Get width and height
-    width, height = lr_image_np.shape[2], lr_image_np.shape[1]
-    print(f"Width: {width}, Height: {height}")
 
     # set the device to 'cuda' if available, otherwise 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # initialize a SIREN model
-    img_siren = Siren(in_features=2, out_features=3, hidden_features=256,
-                    hidden_layers=3, outermost_linear=True)
-    img_siren = img_siren.to(device)
 
     # Prepare LR→HR super-resolution data from DIV2K dataset
     # We already have lr_image_VR (low-res) and hr_image (high-res) from the dataset
@@ -236,8 +196,8 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     optimizer = torch.optim.Adam(sr_siren.parameters(), lr=1e-4)
     criterion = nn.MSELoss()
 
-    n_epochs = 5000
-    print_every = 500
+    n_epochs = num_iter
+    print_every = print_every
 
     # Training: fit SIREN on LR coords→LR pixels, then evaluate at HR coords
     for epoch in range(1, n_epochs+1):
@@ -251,7 +211,6 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         optimizer.step()
 
         # Log every iteration to TensorBoard with image-specific tag
-        global_step = image_idx * n_epochs + epoch
         writer.add_scalar(f'Loss/LR_train_img{image_idx}', loss.item(), epoch)
 
         if epoch % print_every == 0 or epoch == 1:
@@ -283,48 +242,115 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         lr_pred, _ = sr_siren(lr_coords)
         lr_pred_image = lr_pred.view(h_lr, w_lr, C).cpu()
         lr_pred_image = lr_pred_image * 0.5 + 0.5
+
+
     # Calculate PSNR
     mse = torch.mean((sr_image - (hr_tensor.cpu().permute(1,2,0)*0.5+0.5))**2)
     psnr = 10 * torch.log10(1.0 / mse)
     print(f"\nFinal PSNR: {psnr.item():.2f} dB")
-    
+
+    # Calculate SSIM
+    # Denormalise HR back to [0,1]
+    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    # Scale back to [0,1]
+    hr_img = hr_img.permute(1, 2, 0).cpu() 
+    sr_np = sr_image.cpu().numpy()
+    hr_np = hr_img.numpy()
+    ssim_value = ssim(sr_np, hr_np, channel_axis=2, data_range=1.0)
+    print(f"Final SSIM: {ssim_value:.4f}")
+
+    # Calculate LPIPS
+    loss_fn = lpips.LPIPS(net='alex').to(device)
+    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    # [C,H,W]
+    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   # [1,3,H,W], [0,1]
+    hr_lpips = hr_img.unsqueeze(0)                      # [1,3,H,W], [0,1]
+    sr_lpips = (sr_lpips * 2 - 1).to(device)  # scale to [-1,1]
+    hr_lpips = (hr_lpips * 2 - 1).to(device)
+    lpips_value = loss_fn(sr_lpips, hr_lpips).item()
+    print(f"Final LPIPS: {lpips_value:.4f}")
+
     # Log final images to TensorBoard with image index
     writer.add_image(f'Images/img{image_idx}_LR_input', lr_tensor.cpu()*0.5+0.5, image_idx)
     writer.add_image(f'Images/img{image_idx}_HR_ground_truth', hr_tensor.cpu()*0.5+0.5, image_idx)
     writer.add_image(f'Images/img{image_idx}_SR_output', sr_image.permute(2,0,1), image_idx)
     
-    return psnr.item()
+    return psnr.item(), ssim_value, lpips_value
 
+
+class Logger:
+    """Simple logger that writes to both console and file"""
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def close(self):
+        self.log.close()
 
 ## Main training loop over validation dataset
 def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = 'runs'
-    writer = SummaryWriter(f'{log_dir}/siren_sr_dataset_{timestamp}')
+    run_dir = f'{log_dir}/siren_sr_dataset_{timestamp}'
+    writer = SummaryWriter(run_dir)
+    
+    # Create text log file
+    os.makedirs(run_dir, exist_ok=True)
+    log_file = f'{run_dir}/training_log.txt'
+    logger = Logger(log_file)
+    sys.stdout = logger
+    
+    print(f"Training started at {timestamp}")
+    print(f"Logs will be saved to: {run_dir}")
+    print(f"Text log: {log_file}\n")
     
     psnr_values = []
+    ssim_values = []
+    lpips_values = []
     
     for i, (lr_image, hr_image) in enumerate(valid_loader):
         print(f"\n{'='*60}")
         print(f"Processing image {i+1}/{len(valid_loader)}")
         print(f"{'='*60}")
-        psnr = train_siren_for_one_image(lr_image.squeeze(0), hr_image.squeeze(0), writer, i)
+        psnr, ssim_value, lpips_value = train_siren_for_one_image(lr_image.squeeze(0), hr_image.squeeze(0), writer, i)
         psnr_values.append(psnr)
+        ssim_values.append(ssim_value)
+        lpips_values.append(lpips_value)
         
-        # Log per-image PSNR to dataset-level metrics
+        # Log per-image PSNR, SSIM, and LPIPS to dataset-level metrics
         writer.add_scalar('Dataset/PSNR_per_image', psnr, i)
+        writer.add_scalar('Dataset/SSIM_per_image', ssim_value, i)
+        writer.add_scalar('Dataset/LPIPS_per_image', lpips_value, i)
 
-    # Calculate and log average PSNR over dataset
+    # Calculate and log average PSNR, SSIM, and LPIPS over dataset
     avg_psnr = sum(psnr_values) / len(psnr_values)
+    avg_ssim = sum(ssim_values) / len(ssim_values)
+    avg_lpips = sum(lpips_values) / len(lpips_values)
     print(f"\n{'='*60}")
     print(f"Average PSNR over validation dataset: {avg_psnr:.2f} dB")
+    print(f"Average SSIM over validation dataset: {avg_ssim:.4f}")
+    print(f"Average LPIPS over validation dataset: {avg_lpips:.4f}")
     print(f"{'='*60}")
     
     writer.add_scalar('Dataset/Average_PSNR', avg_psnr, 0)
+    writer.add_scalar("Dataset/Average_SSIM", avg_ssim, 0)
+    writer.add_scalar("Dataset/Average_LPIPS", avg_lpips, 0)
     writer.close()
-    print(f"\nAll logs saved to {writer.log_dir}")
+    print(f"\nAll logs saved to {run_dir}")
+    print(f"Text log saved to: {log_file}")
     print(f"View with: tensorboard --logdir={log_dir}")
+    
+    # Close logger and restore stdout
+    sys.stdout = logger.terminal
+    logger.close()
 
     
 if __name__ == "__main__":

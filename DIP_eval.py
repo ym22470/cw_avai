@@ -1,12 +1,16 @@
 import numpy as np
-import torch.optim
-import random
+import sys
+import os
+from datetime import datetime
+import torch.nn.functional as F
+import lpips
 from dataloader import DIV2KDataset
 from torchvision import transforms
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from models import *
 from utils.utils_DIP.denoising_utils import *
-from skimage.metrics import peak_signal_noise_ratio
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity as ssim
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark =True
@@ -17,8 +21,6 @@ if use_gpu:
     dtype = torch.cuda.FloatTensor
 else:
     dtype = torch.float32
-
-PLOT = True
 
 INPUT = 'noise' # 'meshgrid'
 pad = 'reflection'
@@ -33,9 +35,14 @@ show_every = 500
 exp_weight=0.99
 
 num_iter = 5000
-input_depth = 3
+input_depth = 32
 figsize = 32
-random_noise = False
+random_noise = True
+
+INPUT =     'noise'
+pad   =     'reflection'
+OPT_OVER =  'net'
+KERNEL_TYPE='lanczos2'
 
 
 # Define transforms (convert to tensor)
@@ -53,41 +60,6 @@ valid_dataset = DIV2KDataset(
 # Initialize DataLoader (Batch size 1 for validation/DIP)
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
-# 1. Get the total number of images
-total_images = len(valid_dataset)
-
-# 2. Pick a random index
-random_idx = random.randint(0, total_images - 1)
-
-# 3. Retrieve the image pair directly
-lr_image, hr_image = valid_dataset[29]
-
-print(f"Selected Image Index: {random_idx}")
-
-# Upsample LR image to match HR size
-import torch.nn.functional as F
-lr_image = F.interpolate(lr_image.unsqueeze(0), size=hr_image.shape[1:], mode='bicubic', align_corners=False).squeeze(0)
-
-# Convert tensors to numpy arrays
-img_noisy_np = np.clip(torch_to_np(lr_image.unsqueeze(0)), 0, 1)
-img_np = np.clip(torch_to_np(hr_image.unsqueeze(0)), 0, 1)
-
-# Crop to be divisible by 32
-factor = 32
-h, w = img_noisy_np.shape[1], img_noisy_np.shape[2]
-new_h = h - h % factor
-new_w = w - w % factor
-img_noisy_np = img_noisy_np[:, :new_h, :new_w]
-img_np = img_np[:, :new_h, :new_w]
-
-if PLOT:
-    plot_image_grid([img_np, img_noisy_np], 4, figsize)
-
-
-
-##############################################################
-###############Network structure##############################
-##############################################################
 net = get_net(
     input_depth, 
     'skip', 
@@ -99,90 +71,238 @@ net = get_net(
     num_scales=5
 ).type(dtype)
 
-# whether to generate random noise or noisy image
-# if random_noise:
-#     net_input = get_noise(input_depth, INPUT, (img_pil.size[1], img_pil.size[0])).type(dtype).detach()
-# else:
-net_input = np_to_torch(img_noisy_np).type(dtype)
+def downsample(x, scale_factor=1/8):
+    return F.interpolate(x, scale_factor=scale_factor, mode='bicubic', 
+                         align_corners=False, antialias=True)
 
-# Compute number of parameters
-s  = sum([np.prod(list(p.size())) for p in net.parameters()])
-print ('Number of params: %d' % s)
+def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter=3000, reg_noise_std = 0.05, factor=8, print_every=500):
+    lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
 
-# Loss
-mse = torch.nn.MSELoss().type(dtype)
+    # Upsample LR image to match HR size
+    # lr_image = F.interpolate(lr_image.unsqueeze(0), size=hr_image.shape[1:], mode='bicubic', align_corners=False).squeeze(0)
 
-img_noisy_torch = np_to_torch(img_noisy_np).type(dtype)
-img_torch = np_to_torch(img_np).type(dtype)
+    # Convert tensors to numpy arrays
+    img_np = np.clip(torch_to_np(hr_image.unsqueeze(0)), 0, 1)
 
 
-"""Start Training"""
-net_input_saved = net_input.detach().clone()
-noise = net_input.detach().clone()
-#smoothing image
-out_avg = net_input_saved
+    # # Crop to be divisible by 32
+    # factor = 8
+    # h, w = img_noisy_np.shape[1], img_noisy_np.shape[2]
+    # new_h = h - h % factor
+    # new_w = w - w % factor
+    # img_noisy_np = img_noisy_np[:, :new_h, :new_w]
+    # img_np = img_np[:, :new_h, :new_w]
 
-#without smoothing
-#out_avg = None
+    # if factor == 4: 
+    #     num_iter = 2000
+    #     reg_noise_std = 0.03
+    # elif factor == 8:
+    #     num_iter = 3000
+    #     reg_noise_std = 0.05
+    # else:
+    #     assert False, 'We did not experiment with other factors'
 
-last_net = None
-psrn_noisy_last = 0
+    # Setup noisy image
+    net_input = get_noise(input_depth, INPUT, (hr_image.size(1), hr_image.size(2))).type(dtype).detach()
 
-i = 0
-def closure():
+    # Compute number of parameters
+    s  = sum([np.prod(list(p.size())) for p in net.parameters()])
+    print ('Number of params: %d' % s)
 
-    global i, out_avg, psrn_noisy_last, last_net, net_input
+    # Loss
+    mse = torch.nn.MSELoss().type(dtype)
+    import torch.nn.functional as F
 
-    if reg_noise_std > 0:
-        net_input = net_input_saved + (noise.normal_() * reg_noise_std)
+    # 1. Define the Downsampler (The "Physics" of the problem)
+  
 
-    out = net(net_input)
+    """Start Training"""
+    net_input_saved = net_input.detach().clone()
+    noise = net_input.detach().clone()
+    #smoothing image
+    # out_avg = net_input_saved
 
-    # Smoothing
-    if out_avg is None:
-        out_avg = out.detach()
-    else:
-        out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
+    #without smoothing
+    out_avg = None
 
-    #total_loss = mse(out, img_noisy_torch)
-    total_loss = mse(out, img_torch)
-    total_loss.backward()
+    last_net = None
+    psrn_noisy_last = 0
 
-    #evaluation with psrn
-    psrn_noisy = peak_signal_noise_ratio(img_noisy_np, out.detach().cpu().numpy()[0])
-    psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
-    psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
+    i = 0
+    def closure():
 
-    if  PLOT and i % 10 == 0:
-         print ('Iteration: ', i, ' Loss: ', total_loss.item(), ' PSRN_gt: ', psrn_gt, ' PSNR_gt_sm: ', psrn_gt_sm)
-    #print ('Iteration %05d    Loss %f   PSRN_gt: %f PSNR_gt_sm: %f' % (i, total_loss.item(), psrn_gt, psrn_gt_sm), '\r', end='')
-    if  PLOT and i % show_every == 0:
-        #out_np = torch_to_np(out)
-        plot_image_grid([np.clip(img_np, 0, 1),
-                         np.clip(torch_to_np(out_avg), 0, 1)], factor=figsize, nrow=2)
+        nonlocal i, out_avg, psrn_noisy_last, last_net, net_input
 
+        if reg_noise_std > 0:
+            net_input = net_input_saved + (noise.normal_() * reg_noise_std)
 
+        out = net(net_input)
 
-    # Backtracking
-    if i % show_every:
-        if psrn_noisy - psrn_noisy_last < -5:
-            print('Falling back to previous checkpoint.')
+        lr_out = downsample(out, scale_factor=1/factor)
 
-            for new_param, net_param in zip(last_net, net.parameters()):
-                net_param.data.copy_(new_param.cuda())
-
-            return total_loss*0
+        # Smoothing
+        if out_avg is None:
+            out_avg = out.detach()
         else:
-            last_net = [x.detach().cpu() for x in net.parameters()]
-            psrn_noisy_last = psrn_noisy
-
-    i += 1
-
-    return total_loss
-
-p = get_params(OPT_OVER, net, net_input)
-optimize(OPTIMIZER, p, closure, LR, num_iter)
+            out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
 
 
-out_np = torch_to_np(net(net_input))
-q = plot_image_grid([img_noisy_np, np.clip(out_np, 0, 1), img_np], factor=figsize)
+        #total_loss = mse(out, img_noisy_torch)
+        total_loss = mse(lr_out, lr_image_VR)
+        total_loss.backward()
+
+        #evaluation with psrn
+        psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
+        psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
+
+
+        # Log to TensorBoard
+        writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
+        writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)
+        writer.add_scalar(f'Metrics/PSNR_smoothed_img{image_idx}', psrn_gt_sm, i)
+
+
+    p = get_params(OPT_OVER, net, net_input)
+    optimize(OPTIMIZER, p, closure, LR, num_iter)
+    
+    # Final evaluation
+    net.eval()
+    with torch.no_grad():
+        out_final = net(net_input)
+        out_avg_final = out_avg if out_avg is not None else out_final
+    
+    out_np = torch_to_np(out_final)
+    out_avg_np = torch_to_np(out_avg_final)
+    
+    # Calculate final metrics
+    final_psnr = peak_signal_noise_ratio(img_np, out_avg_np)
+    print(f"\nFinal PSNR (smoothed): {final_psnr:.2f} dB")
+    
+    # Calculate SSIM
+    out_chw = out_avg_np                          # [3,H,W]
+    gt_chw  = img_np[0]                           # [3,H,W]
+
+    out_hwc = np.transpose(out_chw, (1, 2, 0))    # [H,W,3]
+    gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))    # [H,W,3]
+
+    ssim_value = ssim(out_hwc, gt_hwc,
+                    channel_axis=2, data_range=1.0)
+    print(f"Final SSIM: {ssim_value:.4f}")
+    
+    # Calculate LPIPS
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    loss_fn = lpips.LPIPS(net='alex').to(device)
+    sr_lpips = torch.from_numpy(out_avg_np).to(device)  # [1,3,H,W]
+    hr_lpips = torch.from_numpy(img_np).to(device)      # [1,3,H,W]
+    sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
+    hr_lpips = (hr_lpips * 2 - 1)
+    lpips_value = loss_fn(sr_lpips, hr_lpips).item()
+    print(f"Final LPIPS: {lpips_value:.4f}")
+    
+    # Log final images
+    writer.add_image(f'Images/img{image_idx}_LR_input', torch.from_numpy(lr_image.numpy()), image_idx)
+    writer.add_image(f'Images/img{image_idx}_HR_ground_truth', torch.from_numpy(img_np), image_idx)
+    writer.add_image(f'Images/img{image_idx}_SR_output', torch.from_numpy(out_avg_np), image_idx)
+    
+    return final_psnr, ssim_value, lpips_value
+
+
+class Logger:
+    """Simple logger that writes to both console and file"""
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def close(self):
+        self.log.close()
+
+
+def main():
+    # Create single TensorBoard writer for entire dataset
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_dir = 'runs'
+    run_dir = f'{log_dir}/dip_sr_dataset_{timestamp}'
+    writer = SummaryWriter(run_dir)
+    
+    # Create text log file
+    os.makedirs(run_dir, exist_ok=True)
+    log_file = f'{run_dir}/training_log.txt'
+    logger = Logger(log_file)
+    sys.stdout = logger
+    
+    print(f"DIP Training started at {timestamp}")
+    print(f"Logs will be saved to: {run_dir}")
+    print(f"Text log: {log_file}\n")
+    
+    psnr_values = []
+    ssim_values = []
+    lpips_values = []
+    
+    # Initialize network once (shared across all images)
+    net_shared = get_net(
+        input_depth, 
+        'skip', 
+        pad='reflection', 
+        upsample_mode='bilinear',
+        skip_n33d=32,
+        skip_n33u=32,  
+        skip_n11=4,
+        num_scales=5
+    ).type(dtype)
+    
+    for i, (lr_image, hr_image) in enumerate(valid_loader):
+        print(f"\n{'='*60}")
+        print(f"Processing image {i+1}/{len(valid_loader)}")
+        print(f"{'='*60}")
+        
+        # Reinitialize network weights for each image
+        net_shared.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
+        
+        psnr, ssim_val, lpips_val = train_DIP_for_one_image(
+            net_shared, lr_image.squeeze(0), hr_image.squeeze(0), writer, i, num_iter=3000
+        )
+        psnr_values.append(psnr)
+        ssim_values.append(ssim_val)
+        lpips_values.append(lpips_val)
+        
+        # Log per-image metrics
+        writer.add_scalar('Dataset/PSNR_per_image', psnr, i)
+        writer.add_scalar('Dataset/SSIM_per_image', ssim_val, i)
+        writer.add_scalar('Dataset/LPIPS_per_image', lpips_val, i)
+
+    # Calculate and log average metrics
+    avg_psnr = sum(psnr_values) / len(psnr_values)
+    avg_ssim = sum(ssim_values) / len(ssim_values)
+    avg_lpips = sum(lpips_values) / len(lpips_values)
+    
+    print(f"\n{'='*60}")
+    print(f"Average PSNR over validation dataset: {avg_psnr:.2f} dB")
+    print(f"Average SSIM over validation dataset: {avg_ssim:.4f}")
+    print(f"Average LPIPS over validation dataset: {avg_lpips:.4f}")
+    print(f"{'='*60}")
+    
+    writer.add_scalar('Dataset/Average_PSNR', avg_psnr, 0)
+    writer.add_scalar('Dataset/Average_SSIM', avg_ssim, 0)
+    writer.add_scalar('Dataset/Average_LPIPS', avg_lpips, 0)
+    writer.close()
+    
+    print(f"\nAll logs saved to {run_dir}")
+    print(f"Text log saved to: {log_file}")
+    print(f"View with: tensorboard --logdir={log_dir}")
+    
+    # Close logger and restore stdout
+    sys.stdout = logger.terminal
+    logger.close()
+
+
+if __name__ == "__main__":
+    main()
