@@ -28,13 +28,13 @@ OPT_OVER = 'net' # 'net,input'
 
 #training parameters
 reg_noise_std = 1./30.
-LR = 0.01
+LR = 0.05
 
 OPTIMIZER='adam' # 'LBFGS'
 show_every = 500
 exp_weight=0.99
 
-num_iter = 5000
+num_iter = 2000
 input_depth = 32
 figsize = 32
 random_noise = True
@@ -52,8 +52,8 @@ tfs = transforms.Compose([
 
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
-    hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    hr_dir="dataset/DIV2K_valid_HR",
+    lr_dir="dataset/DIV2K_valid_LR_x8",  # Check your unzipped folder name
     transform=tfs
 )
 
@@ -75,32 +75,12 @@ def downsample(x, scale_factor=1/8):
     return F.interpolate(x, scale_factor=scale_factor, mode='bicubic', 
                          align_corners=False, antialias=True)
 
-def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter=3000, reg_noise_std = 0.05, factor=8, print_every=500):
+def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=8, print_every=500):
     lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
 
-    # Upsample LR image to match HR size
-    # lr_image = F.interpolate(lr_image.unsqueeze(0), size=hr_image.shape[1:], mode='bicubic', align_corners=False).squeeze(0)
 
     # Convert tensors to numpy arrays
     img_np = np.clip(torch_to_np(hr_image.unsqueeze(0)), 0, 1)
-
-
-    # # Crop to be divisible by 32
-    # factor = 8
-    # h, w = img_noisy_np.shape[1], img_noisy_np.shape[2]
-    # new_h = h - h % factor
-    # new_w = w - w % factor
-    # img_noisy_np = img_noisy_np[:, :new_h, :new_w]
-    # img_np = img_np[:, :new_h, :new_w]
-
-    # if factor == 4: 
-    #     num_iter = 2000
-    #     reg_noise_std = 0.03
-    # elif factor == 8:
-    #     num_iter = 3000
-    #     reg_noise_std = 0.05
-    # else:
-    #     assert False, 'We did not experiment with other factors'
 
     # Setup noisy image
     net_input = get_noise(input_depth, INPUT, (hr_image.size(1), hr_image.size(2))).type(dtype).detach()
@@ -119,11 +99,8 @@ def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter
     """Start Training"""
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
-    #smoothing image
-    # out_avg = net_input_saved
 
-    #without smoothing
-    out_avg = None
+    out_avg = None  # start with no average; let the first 'out' define it
 
     last_net = None
     psrn_noisy_last = 0
@@ -154,12 +131,19 @@ def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter
         #evaluation with psrn
         psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
         psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
+        
+        # Print progress less frequently - every 100 iterations instead of 10
+        if i % 100 == 0:
+            print ('Iteration: ', i, ' Loss: ', total_loss.item(), ' PSRN_gt: ', psrn_gt, ' PSNR_gt_sm: ', psrn_gt_sm)
 
+        # Log to TensorBoard less frequently - every 100 iterations instead of every iteration
+        if i % 100 == 0:
+            writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
+            writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)
+            writer.add_scalar(f'Metrics/PSNR_smoothed_img{image_idx}', psrn_gt_sm, i)
 
-        # Log to TensorBoard
-        writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
-        writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)
-        writer.add_scalar(f'Metrics/PSNR_smoothed_img{image_idx}', psrn_gt_sm, i)
+        i += 1
+        return total_loss
 
 
     p = get_params(OPT_OVER, net, net_input)
@@ -180,7 +164,7 @@ def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter
     
     # Calculate SSIM
     out_chw = out_avg_np                          # [3,H,W]
-    gt_chw  = img_np[0]                           # [3,H,W]
+    gt_chw  = img_np                          # [3,H,W]
 
     out_hwc = np.transpose(out_chw, (1, 2, 0))    # [H,W,3]
     gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))    # [H,W,3]
@@ -191,7 +175,7 @@ def train_DIP_for_one_image(net, lr_image, hr_image, writer, image_idx, num_iter
     
     # Calculate LPIPS
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    loss_fn = lpips.LPIPS(net='alex').to(device)
+    loss_fn = loss_fn.to(device)
     sr_lpips = torch.from_numpy(out_avg_np).to(device)  # [1,3,H,W]
     hr_lpips = torch.from_numpy(img_np).to(device)      # [1,3,H,W]
     sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
@@ -246,9 +230,18 @@ def main():
     psnr_values = []
     ssim_values = []
     lpips_values = []
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # create loss function for LPIPS
+    loss_fn = lpips.LPIPS(net='alex').to(device)
     
-    # Initialize network once (shared across all images)
-    net_shared = get_net(
+    for i, (lr_image, hr_image) in enumerate(valid_loader):
+        print(f"\n{'='*60}")
+        print(f"Processing image {i+1}/{len(valid_loader)}")
+        print(f"{'='*60}")
+        
+        # Reinitialize network weights for each image
+        net = get_net(
         input_depth, 
         'skip', 
         pad='reflection', 
@@ -257,18 +250,10 @@ def main():
         skip_n33u=32,  
         skip_n11=4,
         num_scales=5
-    ).type(dtype)
-    
-    for i, (lr_image, hr_image) in enumerate(valid_loader):
-        print(f"\n{'='*60}")
-        print(f"Processing image {i+1}/{len(valid_loader)}")
-        print(f"{'='*60}")
-        
-        # Reinitialize network weights for each image
-        net_shared.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
+        ).type(dtype)
         
         psnr, ssim_val, lpips_val = train_DIP_for_one_image(
-            net_shared, lr_image.squeeze(0), hr_image.squeeze(0), writer, i, num_iter=3000
+            net, loss_fn, lr_image.squeeze(0), hr_image.squeeze(0), writer, i, num_iter=num_iter
         )
         psnr_values.append(psnr)
         ssim_values.append(ssim_val)
