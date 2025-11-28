@@ -88,7 +88,7 @@ def add_awgn(x, sigma):
     return (x + noise).clamp(0.0, 1.0)
 
 
-def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=8, print_every=500):
+def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=16, print_every=500):
     lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
 
 
@@ -197,7 +197,7 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     print(f"Final LPIPS: {lpips_value:.4f}")
     
     # Log final images
-    writer.add_image(f'Images/img{image_idx}_LR_input', torch.from_numpy(lr_image.numpy()), image_idx)
+    writer.add_image(f'Images/img{image_idx}_LR_input', torch.from_numpy(lr_image.numpy()).squeeze(0), image_idx)
     writer.add_image(f'Images/img{image_idx}_HR_ground_truth', torch.from_numpy(img_np), image_idx)
     writer.add_image(f'Images/img{image_idx}_SR_output', torch.from_numpy(out_avg_np), image_idx)
     
@@ -227,7 +227,7 @@ def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = 'runs'
-    run_dir = f'{log_dir}/dip_sigma_{noise_level}_{timestamp}'
+    run_dir = f'{log_dir}/dip_sigma_downscale_{timestamp}'
     writer = SummaryWriter(run_dir)
     
     # Create text log file
@@ -252,7 +252,7 @@ def main():
         if i >= MAX_Images:
             break
         print(f"\n{'='*60}")
-        print(f"Processing image {i+1}/{len(valid_loader)}  (sigma={noise_level})")
+        print(f"Processing image {i+1}/{len(valid_loader)}")
         print(f"{'='*60}")
         
         # Reinitialize network weights for each image
