@@ -20,7 +20,7 @@ def get_mgrid(H, W, dim=2):
     ys = torch.linspace(-1, 1, steps=H)
     xs = torch.linspace(-1, 1, steps=W)
     yy, xx = torch.meshgrid(ys, xs, indexing='ij')
-    grid = torch.stack([xx, yy], dim=-1)  # [H, W, 2]
+    grid = torch.stack([xx, yy], dim=-1)  
     return grid.reshape(-1, dim)
 
 
@@ -65,7 +65,7 @@ class SineLayer(nn.Module):
                                              np.sqrt(6 / self.in_features) / self.omega_0)
 
     def forward(self, input):
-        # 1. pass input through linear layer (self.linear layer performs the linear transformation on the input)
+        # 1. pass input through linear layer
         x = self.linear(input)
 
         # 2. scale the output of the linear transformation by the frequency factor
@@ -108,11 +108,11 @@ class Siren(nn.Module):
             self.net.append(SineLayer(hidden_features, out_features,
                                       is_first=False, omega_0=hidden_omega_0))
 
-        self.net = nn.Sequential(*self.net) # sequential wrapper of SineLayer and Linear
+        self.net = nn.Sequential(*self.net)
 
     def forward(self, coords):
         # coords represents the 2D pixel coordinates
-        coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        coords = coords.clone().detach().requires_grad_(True) 
         output = self.net(coords)
         return output, coords
     
@@ -125,7 +125,7 @@ class ImageData(Dataset):
         # convert the image to a tensor with transformations
         img = image_to_tensor(img)
 
-        self.pixels = img.permute(1, 2, 0).reshape(-1, 3) # pixel values of the org img
+        self.pixels = img.permute(1, 2, 0).reshape(-1, 3) 
 
         # create a grid of coordinates for the image
         self.coords = get_mgrid(img.shape[1], img.shape[2], 2)
@@ -146,7 +146,7 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
@@ -175,12 +175,12 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
 
 
     # Build coordinate grids
-    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  # [h_lr*w_lr, 2]
-    hr_coords = get_mgrid(H, W, dim=2).to(device)        # [H*W, 2]
+    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  
+    hr_coords = get_mgrid(H, W, dim=2).to(device)        
 
     # Prepare pixel targets
-    lr_pixels = lr_tensor.permute(1,2,0).reshape(-1, C)  # [h_lr*w_lr, C]
-    hr_pixels = hr_tensor.permute(1,2,0).reshape(-1, C)  # [H*W, C]
+    lr_pixels = lr_tensor.permute(1,2,0).reshape(-1, C) 
+    hr_pixels = hr_tensor.permute(1,2,0).reshape(-1, C)  
 
     # Initialize SIREN for SR
     sr_siren = Siren(in_features=2, out_features=3, hidden_features=256,
@@ -203,12 +203,12 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         loss.backward()
         optimizer.step()
 
-        # Log every iteration to TensorBoard with image-specific tag
+        # Log every iteration to TensorBoard 
         writer.add_scalar(f'Loss/LR_train_img{image_idx}', loss.item(), epoch)
 
         if epoch % print_every == 0 or epoch == 1:
             with torch.no_grad():
-                # Also evaluate on HR coords to see SR quality
+                # also evaluate on HR coords to see SR quality
                 pred_hr, _ = sr_siren(hr_coords)
                 hr_loss = criterion(pred_hr, hr_pixels)
                 
@@ -217,7 +217,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
                 mse_temp = torch.mean((sr_image_temp - (hr_tensor.cpu().permute(1,2,0)*0.5+0.5))**2)
                 psnr_temp = 10 * torch.log10(1.0 / mse_temp)
                 
-                # Log to TensorBoard with image-specific tag
+                # Log to TensorBoard 
                 writer.add_scalar(f'Loss/HR_eval_img{image_idx}', hr_loss.item(), epoch)
                 writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psnr_temp.item(), epoch)
                 
@@ -318,7 +318,7 @@ def main():
         ssim_values.append(ssim_value)
         lpips_values.append(lpips_value)
         
-        # Log per-image PSNR, SSIM, and LPIPS to dataset-level metrics
+
         writer.add_scalar('Dataset/PSNR_per_image', psnr, i)
         writer.add_scalar('Dataset/SSIM_per_image', ssim_value, i)
         writer.add_scalar('Dataset/LPIPS_per_image', lpips_value, i)

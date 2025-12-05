@@ -22,7 +22,7 @@ def get_mgrid(H, W, dim=2):
     ys = torch.linspace(-1, 1, steps=H)
     xs = torch.linspace(-1, 1, steps=W)
     yy, xx = torch.meshgrid(ys, xs, indexing='ij')
-    grid = torch.stack([xx, yy], dim=-1)  # [H, W, 2]
+    grid = torch.stack([xx, yy], dim=-1) 
     return grid.reshape(-1, dim)
 
 
@@ -67,7 +67,7 @@ class SineLayer(nn.Module):
                                              np.sqrt(6 / self.in_features) / self.omega_0)
 
     def forward(self, input):
-        # 1. pass input through linear layer (self.linear layer performs the linear transformation on the input)
+        # 1. pass input through linear layer 
         x = self.linear(input)
 
         # 2. scale the output of the linear transformation by the frequency factor
@@ -110,11 +110,11 @@ class Siren(nn.Module):
             self.net.append(SineLayer(hidden_features, out_features,
                                       is_first=False, omega_0=hidden_omega_0))
 
-        self.net = nn.Sequential(*self.net) # sequential wrapper of SineLayer and Linear
+        self.net = nn.Sequential(*self.net) 
 
     def forward(self, coords):
         # coords represents the 2D pixel coordinates
-        coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        coords = coords.clone().detach().requires_grad_(True) 
         output = self.net(coords)
         return output, coords
     
@@ -127,7 +127,7 @@ class ImageData(Dataset):
         # convert the image to a tensor with transformations
         img = image_to_tensor(img)
 
-        self.pixels = img.permute(1, 2, 0).reshape(-1, 3) # pixel values of the org img
+        self.pixels = img.permute(1, 2, 0).reshape(-1, 3) 
 
         # create a grid of coordinates for the image
         self.coords = get_mgrid(img.shape[1], img.shape[2], 2)
@@ -148,7 +148,7 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8", 
     transform=tfs
 )
 

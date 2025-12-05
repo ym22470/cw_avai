@@ -24,15 +24,15 @@ if use_gpu:
 else:
     dtype = torch.float32
 
-INPUT = 'noise' # 'meshgrid'
+INPUT = 'noise' 
 pad = 'reflection'
-OPT_OVER = 'net' # 'net,input'
+OPT_OVER = 'net' 
 
 #training parameters
 reg_noise_std = 1./30.
 LR = 0.05
 
-OPTIMIZER='adam' # 'LBFGS'
+OPTIMIZER='adam' 
 show_every = 500
 exp_weight=0.99
 
@@ -47,7 +47,7 @@ OPT_OVER =  'net'
 KERNEL_TYPE='lanczos2'
 
 
-# Define transforms (convert to tensor)
+# Definetransforms
 tfs = transforms.Compose([
     transforms.ToTensor()
 ])
@@ -55,11 +55,11 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
-# Initialize DataLoader (Batch size 1 for validation/DIP)
+# Initialize DataLoader
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
 net = get_net(
@@ -89,7 +89,7 @@ def add_awgn(x, sigma):
 
 
 def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=16, print_every=500):
-    lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
+    lr_image_VR = lr_image.unsqueeze(0).type(dtype) 
 
 
     # Convert tensors to numpy arrays
@@ -139,11 +139,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
         psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
         psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
         
-        # Print progress less frequently - every 100 iterations instead of 10
+        # Print progress
         if i % 100 == 0:
             print ('Iteration: ', i, ' Loss: ', total_loss.item(), ' PSRN_gt: ', psrn_gt, ' PSNR_gt_sm: ', psrn_gt_sm)
 
-        # Log to TensorBoard less frequently - every 100 iterations instead of every iteration
+        # Log to TensorBoard
         if i % 100 == 0:
             writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
             writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)
@@ -170,11 +170,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     print(f"\nFinal PSNR (smoothed): {final_psnr:.2f} dB")
     
     # Calculate SSIM
-    out_chw = out_avg_np                          # [3,H,W]
-    gt_chw  = img_np                          # [3,H,W]
+    out_chw = out_avg_np                      
+    gt_chw  = img_np                      
 
-    out_hwc = np.transpose(out_chw, (1, 2, 0))    # [H,W,3]
-    gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))    # [H,W,3]
+    out_hwc = np.transpose(out_chw, (1, 2, 0))    
+    gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))   
 
     ssim_value = ssim(out_hwc, gt_hwc,
                     channel_axis=2, data_range=1.0)
@@ -183,9 +183,9 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     # Calculate LPIPS
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     loss_fn = loss_fn.to(device)
-    sr_lpips = torch.from_numpy(out_avg_np).to(device)  # [1,3,H,W]
-    hr_lpips = torch.from_numpy(img_np).to(device)      # [1,3,H,W]
-    sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
+    sr_lpips = torch.from_numpy(out_avg_np).to(device) 
+    hr_lpips = torch.from_numpy(img_np).to(device)    
+    sr_lpips = (sr_lpips * 2 - 1) 
     hr_lpips = (hr_lpips * 2 - 1)
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()
     print(f"Final LPIPS: {lpips_value:.4f}")
@@ -270,7 +270,6 @@ def main():
         ssim_values.append(ssim_val)
         lpips_values.append(lpips_val)
         
-        # Log per-image metrics
         writer.add_scalar('Dataset/PSNR_per_image', psnr, i)
         writer.add_scalar('Dataset/SSIM_per_image', ssim_val, i)
         writer.add_scalar('Dataset/LPIPS_per_image', lpips_val, i)

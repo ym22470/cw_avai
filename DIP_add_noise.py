@@ -25,15 +25,15 @@ if use_gpu:
 else:
     dtype = torch.float32
 
-INPUT = 'noise' # 'meshgrid'
+INPUT = 'noise' 
 pad = 'reflection'
-OPT_OVER = 'net' # 'net,input'
+OPT_OVER = 'net' 
 
 #training parameters
 reg_noise_std = 1./30.
 LR = 0.05
 
-OPTIMIZER='adam' # 'LBFGS'
+OPTIMIZER='adam' 
 show_every = 500
 exp_weight=0.99
 
@@ -53,14 +53,14 @@ tfs = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# Initialize Dataset
+# Initialize dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
-# Initialize DataLoader (Batch size 1 for validation/DIP)
+# Initialize DataLoader
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
 net = get_net(
@@ -90,16 +90,16 @@ def add_awgn(x, sigma):
 
 
 def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=8, print_every=500):
-    lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
+    lr_image_VR = lr_image.unsqueeze(0).type(dtype)  
 
 
-    # Convert tensors to numpy arrays
+    #Convert tensors to numpy arrays
     img_np = np.clip(torch_to_np(hr_image.unsqueeze(0)), 0, 1)
 
     # Setup noisy image
     net_input = get_noise(input_depth, INPUT, (hr_image.size(1), hr_image.size(2))).type(dtype).detach()
 
-    # Loss
+    #Loss
     mse = torch.nn.MSELoss().type(dtype)
     import torch.nn.functional as F
   
@@ -140,11 +140,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
         psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
         psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
         
-        # Print progress less frequently - every 100 iterations instead of 10
+        # Print progress
         if i % 100 == 0:
             print ('Iteration: ', i, ' Loss: ', total_loss.item(), ' PSRN_gt: ', psrn_gt, ' PSNR_gt_sm: ', psrn_gt_sm)
 
-        # Log to TensorBoard less frequently - every 100 iterations instead of every iteration
+        # Log to TensorBoard
         if i % 100 == 0:
             writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
             writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)

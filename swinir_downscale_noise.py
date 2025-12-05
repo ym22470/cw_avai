@@ -37,7 +37,7 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
@@ -73,7 +73,7 @@ def run_swinir_x16(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     pad_h = (8 - h % 8) % 8
     pad_w = (8 - w % 8) % 8
     
-    # Pad image (Reflect padding works best to avoid border artifacts)
+    # Pad image
     img_lr_padded = torch.nn.functional.pad(img_lr_tensor, (0, pad_w, 0, pad_h), 'reflect')
 
     with torch.no_grad():
@@ -81,7 +81,6 @@ def run_swinir_x16(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
         output_x8 = model(img_lr_padded)
         # Unpad after x8
         output_x8 = output_x8[:, :, :h*8, :w*8]
-        # Bicubic x2 upscale to reach x16 total
         output = F.interpolate(output_x8, scale_factor=2, mode='bicubic', align_corners=False)
 
     # Convert Output to Numpy
@@ -126,7 +125,7 @@ def run_swinir_x16(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     return final_psnr, ssim_value, lpips_value
 
 
-# 3. Define the Inference Function (Handles Padding)
+# 3. Define the Inference Function
 def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     """
     SwinIR requires image dimensions to be multiples of the window_size (8).
@@ -138,13 +137,13 @@ def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     pad_h = (8 - h % 8) % 8
     pad_w = (8 - w % 8) % 8
     
-    # Pad image (Reflect padding works best to avoid border artifacts)
+    # Pad image
     img_lr_tensor = torch.nn.functional.pad(img_lr_tensor, (0, pad_w, 0, pad_h), 'reflect')
 
     with torch.no_grad():
         output = model(img_lr_tensor)
 
-    # Unpad (Crop back to original size * upscale_factor)
+    # Unpad
     output = output[:, :, :h*8, :w*8]
 
     
@@ -165,7 +164,6 @@ def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     print(f"Final PSNR: {final_psnr:.2f} dB")
 
     # Calculate SSIM
-    # SSIM expects [H, W, C] for multichannel
     out_hwc = np.transpose(out_final_np, (1, 2, 0)) 
     gt_hwc  = np.transpose(img_hr_np,  (1, 2, 0))   
 
@@ -173,14 +171,13 @@ def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     print(f"Final SSIM: {ssim_value:.4f}")
     
     # Calculate LPIPS
-    # LPIPS expects Tensor [Batch, 3, H, W] in range [-1, 1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Convert back to tensor for LPIPS and ensure shapes match
     sr_lpips = torch.from_numpy(out_final_np).unsqueeze(0).to(device)
     hr_lpips = torch.from_numpy(img_hr_np).unsqueeze(0).to(device)    
     
-    sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
+    sr_lpips = (sr_lpips * 2 - 1) 
     hr_lpips = (hr_lpips * 2 - 1)
     
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()
@@ -261,7 +258,9 @@ def main():
                 # Load Image - x8 LR from dataset, then x2 more downscale = x16 total
         img_lr = lr_image
         img_t = img_lr.to(DEVICE)
+
         img_t = downsample(img_t, scale_factor=1/2)  # x8 -> x16 LR
+
         print("After downscale x2, lr shape@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:", img_t.shape)
         img_hr = hr_image
         img_t_hr = img_hr.to(DEVICE)
@@ -276,6 +275,7 @@ def main():
         # Log per-image metrics
         writer.add_scalar('Dataset/PSNR_per_image', psnr, i)
         writer.add_scalar('Dataset/SSIM_per_image', ssim_val, i)
+
         writer.add_scalar('Dataset/LPIPS_per_image', lpips_val, i)
 
     # Calculate and log average metrics
@@ -286,11 +286,13 @@ def main():
     print(f"\n{'='*60}")
     print(f"Average PSNR over validation dataset: {avg_psnr:.2f} dB")
     print(f"Average SSIM over validation dataset: {avg_ssim:.4f}")
+
     print(f"Average LPIPS over validation dataset: {avg_lpips:.4f}")
     print(f"{'='*60}")
     
     writer.add_scalar('Dataset/Average_PSNR', avg_psnr, 0)
     writer.add_scalar('Dataset/Average_SSIM', avg_ssim, 0)
+    
     writer.add_scalar('Dataset/Average_LPIPS', avg_lpips, 0)
     writer.close()
     

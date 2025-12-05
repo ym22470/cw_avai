@@ -45,7 +45,7 @@ OPT_OVER =  'net'
 KERNEL_TYPE='lanczos2'
 
 
-# Define transforms (convert to tensor)
+# Define transforms
 tfs = transforms.Compose([
     transforms.ToTensor()
 ])
@@ -53,11 +53,11 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
-# Initialize DataLoader (Batch size 1 for validation/DIP)
+# Initialize DataLoader
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
 net = get_net(
@@ -76,7 +76,7 @@ def downsample(x, scale_factor=1/8):
                          align_corners=False, antialias=True)
 
 def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, num_iter=num_iter, reg_noise_std = 0.05, factor=8, print_every=500):
-    lr_image_VR = lr_image.unsqueeze(0).type(dtype)  # Add batch dimension and convert to dtype
+    lr_image_VR = lr_image.unsqueeze(0).type(dtype) 
 
 
     # Convert tensors to numpy arrays
@@ -118,7 +118,7 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
             out_avg = out_avg * exp_weight + out.detach() * (1 - exp_weight)
 
 
-        #total_loss = mse(out, img_noisy_torch)
+        #@@@@@@@3##@@total_loss = mse(out, img_noisy_torch)
         total_loss = mse(lr_out, lr_image_VR)
         total_loss.backward()
 
@@ -126,11 +126,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
         psrn_gt    = peak_signal_noise_ratio(img_np, out.detach().cpu().numpy()[0])
         psrn_gt_sm = peak_signal_noise_ratio(img_np, out_avg.detach().cpu().numpy()[0])
         
-        # Print progress less frequently - every 100 iterations instead of 10
+        # Print progress 
         if i % 100 == 0:
             print ('Iteration: ', i, ' Loss: ', total_loss.item(), ' PSRN_gt: ', psrn_gt, ' PSNR_gt_sm: ', psrn_gt_sm)
 
-        # Log to TensorBoard less frequently - every 100 iterations instead of every iteration
+        # Log to TensorBoard
         if i % 100 == 0:
             writer.add_scalar(f'Loss/train_img{image_idx}', total_loss.item(), i)
             writer.add_scalar(f'Metrics/PSNR_img{image_idx}', psrn_gt, i)
@@ -226,7 +226,7 @@ def main():
     lpips_values = []
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # create loss function for LPIPS
+    # create loss function for lPIPS
     loss_fn = lpips.LPIPS(net='alex').to(device)
     
     for i, (lr_image, hr_image) in enumerate(valid_loader):

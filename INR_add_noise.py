@@ -22,7 +22,7 @@ def get_mgrid(H, W, dim=2):
     ys = torch.linspace(-1, 1, steps=H)
     xs = torch.linspace(-1, 1, steps=W)
     yy, xx = torch.meshgrid(ys, xs, indexing='ij')
-    grid = torch.stack([xx, yy], dim=-1)  # [H, W, 2]
+    grid = torch.stack([xx, yy], dim=-1) 
     return grid.reshape(-1, dim)
 
 
@@ -67,7 +67,7 @@ class SineLayer(nn.Module):
                                              np.sqrt(6 / self.in_features) / self.omega_0)
 
     def forward(self, input):
-        # 1. pass input through linear layer (self.linear layer performs the linear transformation on the input)
+        # 1. pass input through linear layer
         x = self.linear(input)
 
         # 2. scale the output of the linear transformation by the frequency factor
@@ -110,11 +110,11 @@ class Siren(nn.Module):
             self.net.append(SineLayer(hidden_features, out_features,
                                       is_first=False, omega_0=hidden_omega_0))
 
-        self.net = nn.Sequential(*self.net) # sequential wrapper of SineLayer and Linear
+        self.net = nn.Sequential(*self.net) 
 
     def forward(self, coords):
         # coords represents the 2D pixel coordinates
-        coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        coords = coords.clone().detach().requires_grad_(True) 
         output = self.net(coords)
         return output, coords
     
@@ -148,7 +148,7 @@ tfs = transforms.Compose([
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
     hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
@@ -268,10 +268,10 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
 
     # Calculate LPIPS
     loss_fn = lpips.LPIPS(net='alex').to(device)
-    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    # [C,H,W]
-    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   # [1,3,H,W], [0,1]
-    hr_lpips = hr_img.unsqueeze(0)                      # [1,3,H,W], [0,1]
-    sr_lpips = (sr_lpips * 2 - 1).to(device)  # scale to [-1,1]
+    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    
+    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   
+    hr_lpips = hr_img.unsqueeze(0)                      
+    sr_lpips = (sr_lpips * 2 - 1).to(device)  
     hr_lpips = (hr_lpips * 2 - 1).to(device)
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()
     print(f"Final LPIPS: {lpips_value:.4f}")
