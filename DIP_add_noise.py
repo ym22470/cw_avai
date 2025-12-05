@@ -55,8 +55,8 @@ tfs = transforms.Compose([
 
 # Initialize dataset
 valid_dataset = DIV2KDataset(
-    hr_dir="dataset/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8",  
+    hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  
     transform=tfs
 )
 
