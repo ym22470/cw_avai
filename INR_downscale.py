@@ -290,7 +290,7 @@ class Logger:
 
     def close(self):
         self.log.close()
-
+import torch.nn.functional as F
 def downsample(x, scale_factor=1/8):
     return F.interpolate(x, scale_factor=scale_factor, mode='bicubic', 
                          align_corners=False, antialias=True)
