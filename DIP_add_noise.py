@@ -99,22 +99,16 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     # Setup noisy image
     net_input = get_noise(input_depth, INPUT, (hr_image.size(1), hr_image.size(2))).type(dtype).detach()
 
-    # Compute number of parameters
-    s  = sum([np.prod(list(p.size())) for p in net.parameters()])
-    print ('Number of params: %d' % s)
-
     # Loss
     mse = torch.nn.MSELoss().type(dtype)
     import torch.nn.functional as F
-
-    # 1. Define the Downsampler (The "Physics" of the problem)
   
 
     """Start Training"""
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
 
-    out_avg = None  # start with no average; let the first 'out' define it
+    out_avg = None  
 
     last_net = None
     psrn_noisy_last = 0
@@ -177,11 +171,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     print(f"\nFinal PSNR (smoothed): {final_psnr:.2f} dB")
     
     # Calculate SSIM
-    out_chw = out_avg_np                          # [3,H,W]
-    gt_chw  = img_np                          # [3,H,W]
+    out_chw = out_avg_np                       
+    gt_chw  = img_np                         
 
-    out_hwc = np.transpose(out_chw, (1, 2, 0))    # [H,W,3]
-    gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))    # [H,W,3]
+    out_hwc = np.transpose(out_chw, (1, 2, 0))    
+    gt_hwc  = np.transpose(gt_chw,  (1, 2, 0))   
 
     ssim_value = ssim(out_hwc, gt_hwc,
                     channel_axis=2, data_range=1.0)
@@ -190,8 +184,8 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     # Calculate LPIPS
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     loss_fn = loss_fn.to(device)
-    sr_lpips = torch.from_numpy(out_avg_np).to(device)  # [1,3,H,W]
-    hr_lpips = torch.from_numpy(img_np).to(device)      # [1,3,H,W]
+    sr_lpips = torch.from_numpy(out_avg_np).to(device) 
+    hr_lpips = torch.from_numpy(img_np).to(device)     
     sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
     hr_lpips = (hr_lpips * 2 - 1)
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()

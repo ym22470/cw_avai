@@ -160,15 +160,11 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     # set the device to 'cuda' if available, otherwise 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-    # Prepare LR→HR super-resolution data from DIV2K dataset
-    # We already have lr_image_VR (low-res) and hr_image (high-res) from the dataset
-
     # Convert to proper tensors in [-1,1] range
-    hr_tensor = hr_image.to(device)  # [C,H,W], already in [0,1]
+    hr_tensor = hr_image.to(device)  
     hr_tensor = (hr_tensor - 0.5) / 0.5  # normalize to [-1,1]
 
-    lr_tensor = lr_image_VR.to(device)  # [C,h_lr,w_lr], already in [0,1]
+    lr_tensor = lr_image_VR.to(device)  
     lr_tensor = (lr_tensor - 0.5) / 0.5  # normalize to [-1,1]
 
     C, H, W = hr_tensor.shape
@@ -177,9 +173,6 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     print(f"HR shape: {hr_tensor.shape}, LR shape: {lr_tensor.shape}")
     print(f"Scale factor: ~{H/h_lr:.1f}x in height, ~{W/w_lr:.1f}x in width")
 
-
-    # Super-resolution training loop: fit SIREN to map LR→HR
-    # Strategy: Train on LR coordinates to predict HR pixel values
 
     # Build coordinate grids
     lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  # [h_lr*w_lr, 2]
@@ -199,7 +192,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     n_epochs = num_iter
     print_every = print_every
 
-    # Training: fit SIREN on LR coords→LR pixels, then evaluate at HR coords
+    #train SIREN
     for epoch in range(1, n_epochs+1):
         optimizer.zero_grad()
 
@@ -236,7 +229,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         # Generate SR image by evaluating SIREN at HR coordinates
         sr_output, _ = sr_siren(hr_coords)
         sr_image = sr_output.view(H, W, C).cpu()  # [H,W,C]
-        sr_image = sr_image * 0.5 + 0.5  # denormalize to [0,1]
+        sr_image = sr_image * 0.5 + 0.5  
         
         # Also get LR prediction for comparison
         lr_pred, _ = sr_siren(lr_coords)
@@ -261,8 +254,8 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     # Calculate LPIPS
     loss_fn = lpips.LPIPS(net='alex').to(device)
     hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    # [C,H,W]
-    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   # [1,3,H,W], [0,1]
-    hr_lpips = hr_img.unsqueeze(0)                      # [1,3,H,W], [0,1]
+    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   
+    hr_lpips = hr_img.unsqueeze(0)                     
     sr_lpips = (sr_lpips * 2 - 1).to(device)  # scale to [-1,1]
     hr_lpips = (hr_lpips * 2 - 1).to(device)
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()
@@ -294,7 +287,7 @@ class Logger:
     def close(self):
         self.log.close()
 
-## Main training loop over validation dataset
+# Main training loop over validation dataset
 def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

@@ -64,13 +64,9 @@ model.load_state_dict(pretrained_dict[param_key] if param_key in pretrained_dict
 model.eval()
 model = model.to(DEVICE)
 
-print("Model Loaded Successfully!")
+print("Model Loade")
 
 def run_swinir_x16(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
-    """
-    SwinIR x8 + bicubic x2 for x16 total upscaling.
-    SwinIR requires image dimensions to be multiples of the window_size (8).
-    """
     _, _, h, w = img_lr_tensor.size()
     
     # Calculate padding needed

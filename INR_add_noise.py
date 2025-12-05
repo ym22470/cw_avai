@@ -175,15 +175,12 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-    # Prepare LR→HR super-resolution data from DIV2K dataset
-    # We already have lr_image_VR (low-res) and hr_image (high-res) from the dataset
-
     # Convert to proper tensors in [-1,1] range
-    hr_tensor = hr_image.to(device)  # [C,H,W], already in [0,1]
-    hr_tensor = (hr_tensor - 0.5) / 0.5  # normalize to [-1,1]
+    hr_tensor = hr_image.to(device) 
+    hr_tensor = (hr_tensor - 0.5) / 0.5 
 
-    lr_tensor = lr_image_VR.to(device)  # [C,h_lr,w_lr], already in [0,1]
-    lr_tensor = (lr_tensor - 0.5) / 0.5  # normalize to [-1,1]
+    lr_tensor = lr_image_VR.to(device) 
+    lr_tensor = (lr_tensor - 0.5) / 0.5  
 
     C, H, W = hr_tensor.shape
     _, h_lr, w_lr = lr_tensor.shape
@@ -192,12 +189,9 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     print(f"Scale factor: ~{H/h_lr:.1f}x in height, ~{W/w_lr:.1f}x in width")
 
 
-    # Super-resolution training loop: fit SIREN to map LR→HR
-    # Strategy: Train on LR coordinates to predict HR pixel values
-
     # Build coordinate grids
-    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  # [h_lr*w_lr, 2]
-    hr_coords = get_mgrid(H, W, dim=2).to(device)        # [H*W, 2]
+    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  
+    hr_coords = get_mgrid(H, W, dim=2).to(device)       
 
     # Prepare pixel targets
     lr_pixels = lr_tensor.permute(1,2,0).reshape(-1, C)  # [h_lr*w_lr, C]
@@ -213,7 +207,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     n_epochs = num_iter
     print_every = print_every
 
-    # Training: fit SIREN on LR coords→LR pixels, then evaluate at HR coords
+    #train SIREN
     for epoch in range(1, n_epochs+1):
         optimizer.zero_grad()
 
@@ -224,7 +218,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         loss.backward()
         optimizer.step()
 
-        # Log every iteration to TensorBoard with image-specific tag
+        # Log every iteration to TensorBoard 
         writer.add_scalar(f'Loss/LR_train_img{image_idx}', loss.item(), epoch)
 
         if epoch % print_every == 0 or epoch == 1:
@@ -250,7 +244,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
         # Generate SR image by evaluating SIREN at HR coordinates
         sr_output, _ = sr_siren(hr_coords)
         sr_image = sr_output.view(H, W, C).cpu()  # [H,W,C]
-        sr_image = sr_image * 0.5 + 0.5  # denormalize to [0,1]
+        sr_image = sr_image * 0.5 + 0.5 
         
         # Also get LR prediction for comparison
         lr_pred, _ = sr_siren(lr_coords)
@@ -308,7 +302,7 @@ class Logger:
     def close(self):
         self.log.close()
 
-## Main training loop over validation dataset
+# Main training loop over validation dataset
 def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

@@ -85,16 +85,11 @@ def train_DIP_for_one_image(net, loss_fn,lr_image, hr_image, writer, image_idx, 
     # Setup noisy image
     net_input = get_noise(input_depth, INPUT, (hr_image.size(1), hr_image.size(2))).type(dtype).detach()
 
-    # Compute number of parameters
-    s  = sum([np.prod(list(p.size())) for p in net.parameters()])
-    print ('Number of params: %d' % s)
-
     # Loss
     mse = torch.nn.MSELoss().type(dtype)
     import torch.nn.functional as F
 
   
-
     """Start Training"""
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
