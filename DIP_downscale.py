@@ -17,7 +17,7 @@ torch.backends.cudnn.benchmark =True
 
 use_gpu = True
 
-MAX_Images = 10
+MAX_Images = 100
 
 if use_gpu:
     dtype = torch.cuda.FloatTensor

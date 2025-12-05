@@ -16,7 +16,7 @@ from datetime import datetime
 from skimage.metrics import structural_similarity as ssim
 
 noise_level = 0.2
-MAX_Images = 10
+MAX_Images = 100
 
 def get_mgrid(H, W, dim=2):
     ys = torch.linspace(-1, 1, steps=H)

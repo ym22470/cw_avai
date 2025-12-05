@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 from skimage.metrics import structural_similarity as ssim
 
-MAX_Images = 10
+MAX_Images = 100
 
 
 def get_mgrid(H, W, dim=2):
