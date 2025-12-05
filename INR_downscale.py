@@ -162,16 +162,12 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     # set the device to 'cuda' if available, otherwise 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-    # Prepare LR→HR super-resolution data from DIV2K dataset
-    # We already have lr_image_VR (low-res) and hr_image (high-res) from the dataset
-
     # Convert to proper tensors in [-1,1] range
-    hr_tensor = hr_image.to(device)  # [C,H,W], already in [0,1]
-    hr_tensor = (hr_tensor - 0.5) / 0.5  # normalize to [-1,1]
+    hr_tensor = hr_image.to(device) 
+    hr_tensor = (hr_tensor - 0.5) / 0.5 
 
-    lr_tensor = lr_image_VR.to(device)  # [C,h_lr,w_lr], already in [0,1]
-    lr_tensor = (lr_tensor - 0.5) / 0.5  # normalize to [-1,1]
+    lr_tensor = lr_image_VR.to(device)  
+    lr_tensor = (lr_tensor - 0.5) / 0.5  
 
     C, H, W = hr_tensor.shape
     _, h_lr, w_lr = lr_tensor.shape
@@ -180,16 +176,14 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     print(f"Scale factor: ~{H/h_lr:.1f}x in height, ~{W/w_lr:.1f}x in width")
 
 
-    # Super-resolution training loop: fit SIREN to map LR→HR
-    # Strategy: Train on LR coordinates to predict HR pixel values
+    # Super-resolution training loop
 
     # Build coordinate grids
-    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device)  # [h_lr*w_lr, 2]
-    hr_coords = get_mgrid(H, W, dim=2).to(device)        # [H*W, 2]
-
+    lr_coords = get_mgrid(h_lr, w_lr, dim=2).to(device) 
+    hr_coords = get_mgrid(H, W, dim=2).to(device)        
     # Prepare pixel targets
-    lr_pixels = lr_tensor.permute(1,2,0).reshape(-1, C)  # [h_lr*w_lr, C]
-    hr_pixels = hr_tensor.permute(1,2,0).reshape(-1, C)  # [H*W, C]
+    lr_pixels = lr_tensor.permute(1,2,0).reshape(-1, C) 
+    hr_pixels = hr_tensor.permute(1,2,0).reshape(-1, C) 
 
     # Initialize SIREN for SR
     sr_siren = Siren(in_features=2, out_features=3, hidden_features=256,
@@ -237,7 +231,7 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
     with torch.no_grad():
         # Generate SR image by evaluating SIREN at HR coordinates
         sr_output, _ = sr_siren(hr_coords)
-        sr_image = sr_output.view(H, W, C).cpu()  # [H,W,C]
+        sr_image = sr_output.view(H, W, C).cpu() 
         sr_image = sr_image * 0.5 + 0.5  # denormalize to [0,1]
         
         # Also get LR prediction for comparison
@@ -262,10 +256,11 @@ def train_siren_for_one_image(lr_image, hr_image, writer, image_idx, num_iter=50
 
     # Calculate LPIPS
     loss_fn = lpips.LPIPS(net='alex').to(device)
-    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)    # [C,H,W]
-    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   # [1,3,H,W], [0,1]
-    hr_lpips = hr_img.unsqueeze(0)                      # [1,3,H,W], [0,1]
-    sr_lpips = (sr_lpips * 2 - 1).to(device)  # scale to [-1,1]
+    hr_img = (hr_tensor * 0.5 + 0.5).clamp(0, 1)  
+    sr_lpips = sr_image.permute(2, 0, 1).unsqueeze(0)   
+    hr_lpips = hr_img.unsqueeze(0)                     
+    sr_lpips = (sr_lpips * 2 - 1).to(device)  
+    # scale to [-1,1]
     hr_lpips = (hr_lpips * 2 - 1).to(device)
     lpips_value = loss_fn(sr_lpips, hr_lpips).item()
     print(f"Final LPIPS: {lpips_value:.4f}")

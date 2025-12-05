@@ -12,20 +12,17 @@ from models import *
 from utils.utils_DIP.denoising_utils import *
 from torch.utils.data import DataLoader
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity as ssim
-
-# Import SwinIR from the file you downloaded (or paste the class definition)
-# Ensure 'network_swinir.py' is in the same folder
 from models.network_swinir import SwinIR
 
-# --- CONFIGURATION ---
+
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# Path to the weight file you downloaded
 MODEL_PATH = '001_classicalSR_DIV2K_s48w8_SwinIR-M_x8.pth' 
-IMG_PATH = 'dataset/DIV2K_valid_LR_x8/0801x8.png' # Your test image
-# Define transforms (convert to tensor)
+IMG_PATH = 'dataset/DIV2K_valid_LR_x8/0801x8.png'
 
 use_gpu = True
+noise_level = 0.5
 
 if use_gpu:
     dtype = torch.cuda.FloatTensor
@@ -39,24 +36,24 @@ tfs = transforms.Compose([
 
 # Initialize Dataset
 valid_dataset = DIV2KDataset(
-    hr_dir="dataset/DIV2K_valid_HR",
-    lr_dir="dataset/DIV2K_valid_LR_x8",  # Check your unzipped folder name
+    hr_dir="dataset/DIV2K_valid_HR/DIV2K_valid_HR",
+    lr_dir="dataset/DIV2K_valid_LR_x8/DIV2K_valid_LR_x8",  # Check your unzipped folder name
     transform=tfs
 )
 
 # Initialize DataLoader (Batch size 1 for validation/DIP)
 valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
-model = SwinIR(upscale=8,               # Task 2.1 is x8
+model = SwinIR(upscale=8,           
                in_chans=3, 
-               img_size=48,             # CRITICAL FIX: s48 = 48 (Not 64)
+               img_size=48,           
                window_size=8, 
                img_range=1., 
                depths=[6, 6, 6, 6, 6, 6], 
                embed_dim=180, 
                num_heads=[6, 6, 6, 6, 6, 6], 
                mlp_ratio=2, 
-               upsampler='pixelshuffle', # CRITICAL FIX: Classical uses 'pixelshuffle'
+               upsampler='pixelshuffle',
                resi_connection='1conv')
 
 # Load the weights
@@ -68,6 +65,70 @@ model.eval()
 model = model.to(DEVICE)
 
 print("Model Loaded Successfully!")
+
+def run_swinir_x16(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
+    """
+    SwinIR x8 + bicubic x2 for x16 total upscaling.
+    SwinIR requires image dimensions to be multiples of the window_size (8).
+    """
+    _, _, h, w = img_lr_tensor.size()
+    
+    # Calculate padding needed
+    pad_h = (8 - h % 8) % 8
+    pad_w = (8 - w % 8) % 8
+    
+    # Pad image (Reflect padding works best to avoid border artifacts)
+    img_lr_padded = torch.nn.functional.pad(img_lr_tensor, (0, pad_w, 0, pad_h), 'reflect')
+
+    with torch.no_grad():
+        # SwinIR x8 upscale
+        output_x8 = model(img_lr_padded)
+        # Unpad after x8
+        output_x8 = output_x8[:, :, :h*8, :w*8]
+        # Bicubic x2 upscale to reach x16 total
+        output = F.interpolate(output_x8, scale_factor=2, mode='bicubic', align_corners=False)
+
+    # Convert Output to Numpy
+    out_final_np = torch_to_np(output)
+    img_hr_np = torch_to_np(img_hr_tensor)
+    
+    # Get Dimensions and align sizes
+    h_sr, w_sr = out_final_np.shape[1], out_final_np.shape[2]
+    h_hr, w_hr = img_hr_np.shape[1], img_hr_np.shape[2]
+    
+    h_min = min(h_sr, h_hr)
+    w_min = min(w_sr, w_hr)
+    
+    out_final_np = out_final_np[:, :h_min, :w_min]
+    img_hr_np = img_hr_np[:, :h_min, :w_min]
+    print(f"Aligned SR shape###################################################: {out_final_np.shape}, GT shape: {img_hr_np.shape}")
+
+    # Calculate final metrics
+    final_psnr = peak_signal_noise_ratio(img_hr_np, out_final_np, data_range=1.0)
+    print(f"Final PSNR: {final_psnr:.2f} dB")
+
+    # Calculate SSIM
+    out_hwc = np.transpose(out_final_np, (1, 2, 0))
+    gt_hwc  = np.transpose(img_hr_np,  (1, 2, 0))
+    ssim_value = ssim(out_hwc, gt_hwc, channel_axis=2, data_range=1.0)
+    print(f"Final SSIM: {ssim_value:.4f}")
+    
+    # Calculate LPIPS
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    sr_lpips = torch.from_numpy(out_final_np).unsqueeze(0).to(device)
+    hr_lpips = torch.from_numpy(img_hr_np).unsqueeze(0).to(device)
+    sr_lpips = (sr_lpips * 2 - 1)
+    hr_lpips = (hr_lpips * 2 - 1)
+    lpips_value = loss_fn(sr_lpips, hr_lpips).item()
+    print(f"Final LPIPS: {lpips_value:.4f}")
+    
+    # Log final images
+    writer.add_image(f'Images/img{image_idx}_LR_input', torch.from_numpy(torch_to_np(img_lr_tensor)), image_idx)
+    writer.add_image(f'Images/img{image_idx}_HR_ground_truth', torch.from_numpy(img_hr_np), image_idx)
+    writer.add_image(f'Images/img{image_idx}_SR_output', torch.from_numpy(out_final_np), image_idx)
+
+    return final_psnr, ssim_value, lpips_value
+
 
 # 3. Define the Inference Function (Handles Padding)
 def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
@@ -90,36 +151,27 @@ def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     # Unpad (Crop back to original size * upscale_factor)
     output = output[:, :, :h*8, :w*8]
 
-    # --- CRITICAL FIX START ---
     
-    # 1. Convert Output to Numpy (to match img_hr_np format)
-    # Note: torch_to_np usually removes batch dim and handles normalization
     out_final_np = torch_to_np(output)
     img_hr_np = torch_to_np(img_hr_tensor)
     
-    # 2. Get Dimensions (Channels, Height, Width)
-    # Check if shapes match (3, H, W)
+
     h_sr, w_sr = out_final_np.shape[1], out_final_np.shape[2]
     h_hr, w_hr = img_hr_np.shape[1], img_hr_np.shape[2]
     
-    # 3. Crop Ground Truth to match the SR Output size
-    # We take the top-left crop which is standard for these datasets
     h_min = min(h_sr, h_hr)
     w_min = min(w_sr, w_hr)
     
     out_final_np = out_final_np[:, :h_min, :w_min]
     img_hr_np = img_hr_np[:, :h_min, :w_min]
     
-    # --- CRITICAL FIX END ---
-
-    # Calculate final metrics using the aligned numpy arrays
     final_psnr = peak_signal_noise_ratio(img_hr_np, out_final_np, data_range=1.0)
     print(f"Final PSNR: {final_psnr:.2f} dB")
 
     # Calculate SSIM
     # SSIM expects [H, W, C] for multichannel
-    out_hwc = np.transpose(out_final_np, (1, 2, 0))    # [H,W,3]
-    gt_hwc  = np.transpose(img_hr_np,  (1, 2, 0))      # [H,W,3]
+    out_hwc = np.transpose(out_final_np, (1, 2, 0)) 
+    gt_hwc  = np.transpose(img_hr_np,  (1, 2, 0))   
 
     ssim_value = ssim(out_hwc, gt_hwc, channel_axis=2, data_range=1.0)
     print(f"Final SSIM: {ssim_value:.4f}")
@@ -129,8 +181,8 @@ def run_swinir(img_lr_tensor, img_hr_tensor, loss_fn, image_idx, writer):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Convert back to tensor for LPIPS and ensure shapes match
-    sr_lpips = torch.from_numpy(out_final_np).unsqueeze(0).to(device)  # [1,3,H,W]
-    hr_lpips = torch.from_numpy(img_hr_np).unsqueeze(0).to(device)      # [1,3,H,W]
+    sr_lpips = torch.from_numpy(out_final_np).unsqueeze(0).to(device)
+    hr_lpips = torch.from_numpy(img_hr_np).unsqueeze(0).to(device)    
     
     sr_lpips = (sr_lpips * 2 - 1)  # scale to [-1,1]
     hr_lpips = (hr_lpips * 2 - 1)
@@ -163,18 +215,26 @@ class Logger:
     def close(self):
         self.log.close()
 
-# --- RUN IT ---
+def add_awgn(x, sigma):
+    """
+    x: tensor in [0,1], shape [C,H,W]
+    sigma: noise std in [0,1] scale
+    """
+    if sigma == 0:
+        return x
+    noise = torch.randn_like(x) * sigma
+    return (x + noise).clamp(0.0, 1.0)
 
-# # Save Result
-# output_pil = TF.to_pil_image(output_t.squeeze(0).cpu().clamp(0, 1))
-# output_pil.save('result_swinir.png')
-# print("Saved result_swinir.png")
+def downsample(x, scale_factor=1/2):
+    return F.interpolate(x, scale_factor=scale_factor, mode='bicubic', 
+                         align_corners=False, antialias=True)
+
 
 def main():
     # Create single TensorBoard writer for entire dataset
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = 'runs'
-    run_dir = f'{log_dir}/SWINIR_{timestamp}'
+    run_dir = f'{log_dir}/SWINIR)_downscaled_x16_{timestamp}'
     writer = SummaryWriter(run_dir)
     
     # Create text log file
@@ -197,19 +257,21 @@ def main():
     
     for i, (lr_image, hr_image) in enumerate(valid_loader):
         print(f"\n{'='*60}")
-        print(f"Processing image {i+1}/{len(valid_loader)}")
+        print(f"Processing down sacled image {i+1}/{len(valid_loader)}")
         print(f"{'='*60}")
         # print("lr",lr_image.shape)
         # print("hr", hr_image.shape)
         
-                # Load Image
+                # Load Image - x8 LR from dataset, then x2 more downscale = x16 total
         img_lr = lr_image
         img_t = img_lr.to(DEVICE)
+        img_t = downsample(img_t, scale_factor=1/2)  # x8 -> x16 LR
+        print("After downscale x2, lr shape@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:", img_t.shape)
         img_hr = hr_image
         img_t_hr = img_hr.to(DEVICE)
 
-        # Run Inference
-        psnr, ssim_val, lpips_val= run_swinir(img_t, img_t_hr, loss_fn, i, writer)
+        # Run Inference (SwinIR x8 + bicubic x2 for x16 total)
+        psnr, ssim_val, lpips_val= run_swinir_x16(img_t, img_t_hr, loss_fn, i, writer)
 
         psnr_values.append(psnr)
         ssim_values.append(ssim_val)
